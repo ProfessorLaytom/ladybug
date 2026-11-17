@@ -1,68 +1,127 @@
 package com.example.ladybug.providers
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
 import com.example.ladybug.model.AppItem
 import com.example.ladybug.model.SearchResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class AppSearchProvider(private val context: Context) : SearchProvider {
 
-    override suspend fun performSearch(query: String): SearchResult = withContext(Dispatchers.IO) {
+    private val cacheMutex = Mutex()
+    private val wordSplitRegex = Regex("[\\s._-]+")
+    @Volatile
+    private var cachedApps: List<AppItem>? = null
+
+    init {
+        // Automatically invalidate the app cache if an app is installed, updated, or uninstalled
+        try {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REMOVED)
+                addAction(Intent.ACTION_PACKAGE_REPLACED)
+                addAction(Intent.ACTION_PACKAGE_CHANGED)
+                addDataScheme("package")
+            }
+            context.applicationContext.registerReceiver(object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context?, intent: Intent?) {
+                    cachedApps = null
+                }
+            }, filter)
+        } catch (_: Exception) {
+            // Safe fallback if receiver registration fails in test environments
+        }
+    }
+
+    override suspend fun preload() {
+        getOrLoadApps()
+    }
+
+    override suspend fun performSearch(query: String): SearchResult {
         val cleanQuery = query.trim()
 
-        // 1. Guard clause: Only search if the user has typed 2 or more letters
+        // 1. Fast guard clause BEFORE switching coroutine dispatchers
         if (cleanQuery.length < 2) {
-            return@withContext SearchResult.NoMatch
+            return SearchResult.NoMatch
         }
 
-        return@withContext try {
-            val packageManager = context.packageManager
+        val normQuery = cleanQuery.normalizeForSearch()
+        if (normQuery.length < 2) {
+            return SearchResult.NoMatch
+        }
 
-            // We use an Intent query to find ONLY apps that can be launched (like Settings, Games, etc.)
-            // This filters out hundreds of invisible system background services.
-            val intent = Intent(Intent.ACTION_MAIN, null).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
+        return withContext(Dispatchers.Default) {
+            try {
+                val allApps = getOrLoadApps()
+
+                // 2. Accent-insensitive filter + smart ranking:
+                //    0 = Exact match, 1 = Starts with query, 2 = Any word starts with query, 3 = Contains query
+                //    (allApps is pre-sorted alphabetically, and sortedBy is stable so alphabetical tie-breaking is preserved)
+                val matchedApps = allApps.mapNotNull { app ->
+                    val rank = when {
+                        app.normalizedName == normQuery -> 0
+                        app.normalizedName.startsWith(normQuery) -> 1
+                        app.normalizedWords.any { it.startsWith(normQuery) } -> 2
+                        app.normalizedName.contains(normQuery) -> 3
+                        else -> return@mapNotNull null
+                    }
+                    rank to app
+                }.sortedBy { it.first }
+                    .map { it.second }
+
+                if (matchedApps.isNotEmpty()) {
+                    SearchResult.AppSearch(matchedApps)
+                } else {
+                    SearchResult.NoMatch
+                }
+            } catch (_: Exception) {
+                SearchResult.NoMatch
             }
+        }
+    }
 
-            val resolveInfos = packageManager.queryIntentActivities(intent, 0)
-            val matchedApps = mutableListOf<AppItem>()
+    private suspend fun getOrLoadApps(): List<AppItem> {
+        cachedApps?.let { return it }
 
-            for (info in resolveInfos) {
-                val appName = info.loadLabel(packageManager).toString()
+        return withContext(Dispatchers.IO) {
+            cacheMutex.withLock {
+                cachedApps?.let { return@withLock it }
 
-                // 2. The Check: Does the app name contain the typed letters anywhere? (Case insensitive)
-                if (appName.contains(cleanQuery, ignoreCase = true)) {
-                    val packageName = info.activityInfo.packageName
-                    val drawable = info.loadIcon(packageManager)
+                val packageManager = context.packageManager
+                val intent = Intent(Intent.ACTION_MAIN, null).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                }
 
-                    // Convert the Android Drawable into a Compose-friendly ImageBitmap (128x128 resolution)
-                    val bitmap = drawable.toBitmap(width = 128, height = 128).asImageBitmap()
-
-                    matchedApps.add(
+                val resolveInfos = packageManager.queryIntentActivities(intent, 0)
+                val loadedApps = resolveInfos.mapNotNull { info ->
+                    try {
+                        val appName = info.loadLabel(packageManager).toString()
+                        val packageName = info.activityInfo.packageName
+                        val drawable = info.loadIcon(packageManager)
+                        val bitmap = drawable.toBitmap(width = 128, height = 128).asImageBitmap()
+                        val normName = appName.normalizeForSearch()
                         AppItem(
                             name = appName,
                             packageName = packageName,
-                            icon = bitmap
+                            icon = bitmap,
+                            normalizedName = normName,
+                            normalizedWords = normName.split(wordSplitRegex).filter { it.isNotEmpty() }
                         )
-                    )
-                }
-            }
+                    } catch (_: Exception) {
+                        null
+                    }
+                }.sortedBy { it.normalizedName }
 
-            // 3. Return the populated list, or NoMatch if nothing was found
-            if (matchedApps.isNotEmpty()) {
-                // Sort alphabetically so it looks clean
-                SearchResult.AppSearch(matchedApps.sortedBy { it.name })
-            } else {
-                SearchResult.NoMatch
+                cachedApps = loadedApps
+                loadedApps
             }
-
-        } catch (e: Exception) {
-            // Catch any PackageManager crashes and fail gracefully
-            SearchResult.NoMatch
         }
     }
 }

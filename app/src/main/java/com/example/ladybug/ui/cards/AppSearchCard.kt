@@ -1,8 +1,11 @@
 package com.example.ladybug.ui.cards
 
 import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -15,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.ladybug.model.SearchResult
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AppSearchCard(result: SearchResult.AppSearch) {
     val context = LocalContext.current
@@ -38,14 +42,25 @@ fun AppSearchCard(result: SearchResult.AppSearch) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        // Makes the row clickable to launch the app!
-                        .clickable {
-                            val launchIntent = context.packageManager.getLaunchIntentForPackage(app.packageName)
-                            launchIntent?.let {
-                                it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                context.startActivity(it)
+                        // Tap to launch the app; long-press to open system App Info settings
+                        .combinedClickable(
+                            onClick = {
+                                val launchIntent = context.packageManager.getLaunchIntentForPackage(app.packageName)
+                                launchIntent?.let {
+                                    it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    context.startActivity(it)
+                                }
+                            },
+                            onLongClick = {
+                                try {
+                                    val infoIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                        data = Uri.fromParts("package", app.packageName, null)
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(infoIntent)
+                                } catch (_: Exception) {}
                             }
-                        }
+                        )
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

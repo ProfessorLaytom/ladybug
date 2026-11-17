@@ -15,7 +15,7 @@ import com.example.ladybug.model.SearchResult
 import androidx.core.net.toUri
 
 @Composable
-fun WebResultCard(result: SearchResult.WebLink) {
+fun WebResultCard(result: SearchResult.WebLink, onOpened: () -> Unit = {}) {
     // We still need the context to launch the tab
     val context = LocalContext.current
 
@@ -30,7 +30,8 @@ fun WebResultCard(result: SearchResult.WebLink) {
                 // 1. Build the intent. (You can actually customize toolbar colors here later if you want!)
                 val customTabsIntent = CustomTabsIntent.Builder().build()
 
-                // 2. Launch it over the current screen
+                // 2. Save to the 📜 search history, then launch it over the current screen
+                onOpened()
                 customTabsIntent.launchUrl(context, result.url.toUri())
             },
         colors = CardDefaults.cardColors(

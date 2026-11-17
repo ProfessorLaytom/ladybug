@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -15,13 +16,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import com.example.ladybug.model.SearchResult
 import androidx.core.net.toUri
+import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.ladybug.model.SearchResult
+import com.example.ladybug.model.WikiArticle
 
 @Composable
-fun WikipediaCard(result: SearchResult.Wikipedia) {
+fun WikipediaCard(
+    result: SearchResult.Wikipedia,
+    // Called right before an article is opened (used to save it to the 📜 history)
+    onArticleOpened: (WikiArticle) -> Unit = {}
+) {
     val context = LocalContext.current
 
     Card(
@@ -33,14 +39,21 @@ fun WikipediaCard(result: SearchResult.Wikipedia) {
         )
     ) {
         Column(modifier = Modifier.padding(vertical = 8.dp)) {
-            // Loop through the articles (Will be 1 or 2 items usually: FR then EN)
+            // Loop through the articles (1 or 2 items: EN then FR)
             result.articles.forEachIndexed { index, article ->
+                if (index > 0) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+                }
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            // Launch the Custom Tab embedded browser on click
                             val customTabsIntent = CustomTabsIntent.Builder().build()
+                            onArticleOpened(article)
                             customTabsIntent.launchUrl(context, article.articleUrl.toUri())
                         }
                         .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -48,30 +61,22 @@ fun WikipediaCard(result: SearchResult.Wikipedia) {
                 ) {
                     // Left Side: The Image
                     if (article.imageUrl != null) {
-                        AsyncImage(
-                            // ---------------------------------------------------------
-                            // THE FIX: We build a custom request to introduce our app
-                            // ---------------------------------------------------------
-                            model = ImageRequest.Builder(LocalContext.current)
+                        val imageRequest = remember(article.imageUrl, context) {
+                            ImageRequest.Builder(context)
                                 .data(article.imageUrl)
-                                .addHeader("User-Agent", "LadybugApp/1.0 (Android)") // Tells Wikipedia we aren't a bot!
-                                .crossfade(true) // Adds a nice smooth fade-in animation
-                                .build(),
-
+                                .addHeader("User-Agent", "Mozilla/5.0 (Android 14; Mobile; rv:130.0) Gecko/130.0 Firefox/130.0")
+                                .size(192)
+                                .crossfade(true)
+                                .build()
+                        }
+                        AsyncImage(
+                            model = imageRequest,
                             contentDescription = "Thumbnail for ${article.title}",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .size(64.dp)
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surface),
-
-                            // You can keep or delete these debug listeners now!
-                            onSuccess = {
-                                android.util.Log.d("CoilDebug", "Successfully loaded image!")
-                            },
-                            onError = { error ->
-                                android.util.Log.e("CoilDebug", "Coil failed to load: ${error.result.throwable}")
-                            }
+                                .background(MaterialTheme.colorScheme.surface)
                         )
                     } else {
                         // Placeholder if the article has no image
@@ -82,7 +87,11 @@ fun WikipediaCard(result: SearchResult.Wikipedia) {
                                 .background(MaterialTheme.colorScheme.surface),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("W", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = "W",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.surfaceVariant
+                            )
                         }
                     }
 
@@ -103,14 +112,11 @@ fun WikipediaCard(result: SearchResult.Wikipedia) {
                             text = article.summary,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            // Even though we truncated in the provider, this guarantees UI safety
                             maxLines = 3,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
-
-
             }
         }
     }

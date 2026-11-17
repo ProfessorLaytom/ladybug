@@ -1,7 +1,7 @@
 package com.example.ladybug.providers
 
-
 import com.example.ladybug.model.SearchResult
+import java.net.URLEncoder
 
 class WebSearchProvider : SearchProvider {
     override suspend fun performSearch(query: String): SearchResult {
@@ -23,16 +23,20 @@ class WebSearchProvider : SearchProvider {
 
             return SearchResult.WebLink(
                 title = "Open $trimmedQuery 🌐",
-                url = url
+                url = url,
+                isDirectUrl = true,
+                query = trimmedQuery
             )
         }
 
-        // 2. DEFAULT SEARCH
-        val formattedQuery = trimmedQuery.replace(" ", "+")
+        // 2. DEFAULT SEARCH (Properly URL-encoded for +, &, #, etc.)
+        val formattedQuery = URLEncoder.encode(trimmedQuery, "UTF-8")
 
         return SearchResult.WebLink(
             title = "internet magique 🙌 '$trimmedQuery'",
-            url = "https://www.google.com/search?q=$formattedQuery"
+            url = "https://www.google.com/search?q=$formattedQuery",
+            isDirectUrl = false,
+            query = trimmedQuery
         )
     }
 }

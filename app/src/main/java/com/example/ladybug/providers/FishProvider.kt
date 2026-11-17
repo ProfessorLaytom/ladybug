@@ -6,97 +6,216 @@ import com.example.ladybug.model.SearchResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.io.FileNotFoundException
 
 class FishProvider(private val context: Context) : SearchProvider {
 
-    private var fishCache: JSONArray? = null
-    private val prefs = context.getSharedPreferences("FishModulePrefs", Context.MODE_PRIVATE)
+    private val cacheMutex = Mutex()
+    @Volatile
+    private var fishCache: List<SearchResult.Fish>? = null
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    override suspend fun performSearch(query: String): SearchResult = withContext(Dispatchers.IO) {
-        val trimmedQuery = query.trim().lowercase()
-        // Safety guard: If empty, do nothing
-        if (trimmedQuery.isEmpty()) return@withContext SearchResult.NoMatch
+    init {
+        ensureFavoritesLoaded(context)
+    }
 
-        try {
-            val array = loadJsonArray() ?: return@withContext SearchResult.NoMatch
-            if (array.length() == 0) return@withContext SearchResult.NoMatch
+    override suspend fun preload() {
+        loadFishList()
+    }
 
-            // TRIGGER 1: The Daily Fish (Auto-typed by ViewModel at 5 AM)
-            if (trimmedQuery == "daily fish") {
-                val index = getNextFishIndex(array.length())
-                return@withContext getFishFromCache(array, index, feedback = "Ton petit poisson du matin ❤️")
+    companion object {
+        private const val PREFS_NAME = "FishModulePrefs"
+        private const val KEY_CURRENT_INDEX = "current_fish_index"
+        private const val KEY_DISCOVERED_COUNT = "discovered_fish_count"
+        private const val KEY_LAST_ROLL_TIME = "last_random_roll_time"
+        private const val KEY_FAVORITES = "favorite_fish_scientific_names"
+
+        private val _favoritesFlow = MutableStateFlow<Set<String>>(emptySet())
+        val favoritesFlow: StateFlow<Set<String>> = _favoritesFlow.asStateFlow()
+        @Volatile
+        private var favoritesInitialized = false
+
+        fun ensureFavoritesLoaded(context: Context) {
+            if (!favoritesInitialized) {
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val saved = prefs.getStringSet(KEY_FAVORITES, emptySet())?.toSet() ?: emptySet()
+                _favoritesFlow.value = saved
+                favoritesInitialized = true
             }
+        }
 
-            // TRIGGER 2: Explicit user command (Instant - no waiting)
-            if (trimmedQuery == "fish pls") {
-                val index = getNextFishIndex(array.length())
-                return@withContext getFishFromCache(array, index)
+        fun toggleFavorite(context: Context, scientificName: String): Boolean {
+            ensureFavoritesLoaded(context)
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val current = _favoritesFlow.value.toMutableSet()
+            val isNowFavorite = if (current.contains(scientificName)) {
+                current.remove(scientificName)
+                false
+            } else {
+                current.add(scientificName)
+                true
             }
-
-            // --- THE MAGIC TRICK ---
-            // Wait for 0.5 seconds. If the user types another letter during this time,
-            // the MainViewModel will cancel this coroutine, and the code below will NEVER run!
-            delay(500)
-
-            // TRIGGER 3: The Random Encounter (Only runs if they stopped typing)
-            if (shouldRollRandomChance()) {
-                val index = getNextFishIndex(array.length())
-                return@withContext getFishFromCache(array, index, feedback = "OMG UN POISSON SURPRISE")
-            }
-
-            return@withContext SearchResult.NoMatch
-
-        } catch (e: CancellationException) {
-            // CRITICAL: If the ViewModel cancels us because the user typed a letter,
-            // we must throw this exception back to the system so it cancels properly.
-            throw e
-        } catch (_: Exception) {
-            return@withContext SearchResult.NoMatch
+            prefs.edit { putStringSet(KEY_FAVORITES, current) }
+            _favoritesFlow.value = current.toSet()
+            return isNowFavorite
         }
     }
 
-    private fun loadJsonArray(): JSONArray? {
-        if (fishCache == null) {
-            try {
-                val jsonString = context.assets.open("waterlife_data.json").bufferedReader().use { it.readText() }
-                fishCache = JSONArray(jsonString)
-            } catch (_: FileNotFoundException) {
-                return null
-            }
-        }
-        return fishCache
-    }
-
-    private fun getFishFromCache(array: JSONArray, index: Int, feedback: String? = null): SearchResult {
-        val fishObj = array.getJSONObject(index)
-        return SearchResult.Fish(
-            commonName = fishObj.optString("common_name", "Unknown"),
-            scientificName = fishObj.optString("scientific_name", "Unknown"),
-            imageUrl = fishObj.optString("image_url", ""),
-            description = fishObj.optString("description", "No description available."),
-            wikipediaUrl = fishObj.optString("wikipedia_url", ""),
-            systemFeedback = feedback
+    /**
+     * Called directly by MainViewModel on the first launch after 5:00 AM
+     * so the Daily Fish appears without typing "daily fish" in the search bar.
+     */
+    suspend fun fetchDailyFish(): SearchResult.Fish? = withContext(Dispatchers.IO) {
+        val list = loadFishList() ?: return@withContext null
+        if (list.isEmpty()) return@withContext null
+        val index = getNextFishIndex(list.size)
+        list[index].copy(
+            systemFeedback = "Ton petit poisson du matin ❤️",
+            isDailyFish = true
         )
     }
 
+    /**
+     * Returns all past discovered fish (most recent first), excluding any future undiscovered fish.
+     */
+    suspend fun getDiscoveredFish(): List<SearchResult.Fish> = withContext(Dispatchers.IO) {
+        val list = loadFishList() ?: return@withContext emptyList()
+        val total = list.size
+        if (total == 0) return@withContext emptyList()
+
+        val discoveredCount = getDiscoveredCount(total)
+        if (discoveredCount <= 0) return@withContext emptyList()
+
+        // Order from most recently discovered (discoveredCount - 1) down to 0
+        (discoveredCount - 1 downTo 0).map { idx ->
+            list[idx]
+        }
+    }
+
+    override suspend fun performSearch(query: String): SearchResult {
+        val trimmedQuery = query.trim().lowercase()
+        if (trimmedQuery.isEmpty()) return SearchResult.NoMatch
+
+        return withContext(Dispatchers.IO) {
+            try {
+                // TRIGGER 1: The Daily Fish command (if typed manually)
+                if (trimmedQuery == "daily fish") {
+                    val list = loadFishList() ?: return@withContext SearchResult.NoMatch
+                    if (list.isEmpty()) return@withContext SearchResult.NoMatch
+                    val index = getNextFishIndex(list.size)
+                    return@withContext list[index].copy(
+                        systemFeedback = "Ton petit poisson du matin ❤️"
+                    )
+                }
+
+                // TRIGGER 2: Explicit user command (Instant - no waiting)
+                if (trimmedQuery == "fish pls") {
+                    val list = loadFishList() ?: return@withContext SearchResult.NoMatch
+                    if (list.isEmpty()) return@withContext SearchResult.NoMatch
+                    val index = getNextFishIndex(list.size)
+                    return@withContext list[index]
+                }
+
+                // TRIGGER 3: Past Discovered Fish / Fishdex command
+                if (trimmedQuery == "my fish" ||
+                    trimmedQuery == "fishdex" ||
+                    trimmedQuery == "past fish" ||
+                    trimmedQuery == "mes poissons" ||
+                    trimmedQuery == "poissons"
+                ) {
+                    return@withContext SearchResult.FishHistory(getDiscoveredFish())
+                }
+
+                // --- THE MAGIC TRICK ---
+                // Wait for 0.5 seconds. If the user types another letter during this time,
+                // the MainViewModel will cancel this coroutine, and the code below will NEVER run!
+                delay(500)
+
+                // TRIGGER 4: The Random Encounter (Only runs if they stopped typing)
+                // Check the 1% roll BEFORE loading the 633 KB JSON array!
+                if (shouldRollRandomChance()) {
+                    val list = loadFishList() ?: return@withContext SearchResult.NoMatch
+                    if (list.isEmpty()) return@withContext SearchResult.NoMatch
+                    val index = getNextFishIndex(list.size)
+                    return@withContext list[index].copy(systemFeedback = "OMG UN POISSON SURPRISE")
+                }
+
+                SearchResult.NoMatch
+
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                SearchResult.NoMatch
+            }
+        }
+    }
+
+    private suspend fun loadFishList(): List<SearchResult.Fish>? {
+        fishCache?.let { return it }
+
+        return cacheMutex.withLock {
+            fishCache?.let { return@withLock it }
+            try {
+                val jsonString = context.assets.open("waterlife_data.json")
+                    .bufferedReader()
+                    .use { it.readText() }
+                val array = JSONArray(jsonString)
+                val parsedList = ArrayList<SearchResult.Fish>(array.length())
+                for (i in 0 until array.length()) {
+                    val fishObj = array.getJSONObject(i)
+                    parsedList.add(
+                        SearchResult.Fish(
+                            commonName = fishObj.optString("common_name", "Unknown"),
+                            scientificName = fishObj.optString("scientific_name", "Unknown"),
+                            imageUrl = fishObj.optString("image_url", ""),
+                            description = fishObj.optString("description", "No description available."),
+                            wikipediaUrl = fishObj.optString("wikipedia_url", "")
+                        )
+                    )
+                }
+                fishCache = parsedList
+                parsedList
+            } catch (_: FileNotFoundException) {
+                null
+            }
+        }
+    }
+
+    private fun getDiscoveredCount(arrayLength: Int): Int {
+        val currentIndex = prefs.getInt(KEY_CURRENT_INDEX, 0)
+        // Migrate seamlessly from existing current_fish_index if KEY_DISCOVERED_COUNT wasn't stored yet
+        val storedDiscovered = prefs.getInt(KEY_DISCOVERED_COUNT, currentIndex)
+        return storedDiscovered.coerceIn(0, arrayLength)
+    }
+
     private fun getNextFishIndex(arrayLength: Int): Int {
-        val currentIndex = prefs.getInt("current_fish_index", 0)
+        val currentIndex = prefs.getInt(KEY_CURRENT_INDEX, 0)
+        val currentDiscovered = getDiscoveredCount(arrayLength)
         val nextIndex = (currentIndex + 1) % arrayLength
-        prefs.edit { putInt("current_fish_index", nextIndex) }
+        val nextDiscovered = (currentDiscovered + 1).coerceAtMost(arrayLength)
+
+        prefs.edit {
+            putInt(KEY_CURRENT_INDEX, nextIndex)
+            putInt(KEY_DISCOVERED_COUNT, nextDiscovered)
+        }
         return currentIndex
     }
 
     private fun shouldRollRandomChance(): Boolean {
         val currentTime = System.currentTimeMillis()
-        val lastRollTime = prefs.getLong("last_random_roll_time", 0L)
+        val lastRollTime = prefs.getLong(KEY_LAST_ROLL_TIME, 0L)
 
         // Global Cooldown: Even if they stop typing, only let the dice roll
         // a maximum of once every 3 seconds to prevent spam.
         if (currentTime - lastRollTime > 3000) {
-            prefs.edit { putLong("last_random_roll_time", currentTime) }
+            prefs.edit { putLong(KEY_LAST_ROLL_TIME, currentTime) }
 
             // 1% chance
             return (1..100).random() <= 1

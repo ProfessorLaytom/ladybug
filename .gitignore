@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+/ARCHITECTURE.md
+/AI_AGENT_LOG.md
+

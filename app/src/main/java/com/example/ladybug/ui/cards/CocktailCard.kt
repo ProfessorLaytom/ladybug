@@ -1,37 +1,65 @@
 package com.example.ladybug.ui.cards
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.key // THE FIX: Key import for smooth list updates
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.ladybug.R // Ensure this matches your package
+import com.example.ladybug.R
 import com.example.ladybug.model.SearchResult
 
 @Composable
-fun CocktailRecipeCard(result: SearchResult.CocktailRecipe) {
+fun CocktailRecipeCard(
+    result: SearchResult.CocktailRecipe,
+    previousSearchLabel: String? = null,
+    onBackToSuggestions: (() -> Unit)? = null
+) {
     val cocktail = result.cocktail
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .animateContentSize(),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
             contentColor = MaterialTheme.colorScheme.onSurfaceVariant
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Top Section: Left (Name/Ingredients) & Right (Glass/Garnish)
+            if (onBackToSuggestions != null) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onBackToSuggestions() }
+                ) {
+                    Text(
+                        text = if (!previousSearchLabel.isNullOrBlank()) {
+                            "← Back to '$previousSearchLabel'"
+                        } else {
+                            "← Back to results"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
+            // Top Section: Left (Name/Category/Ingredients) & Right (Glass/Garnish)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -44,6 +72,15 @@ fun CocktailRecipeCard(result: SearchResult.CocktailRecipe) {
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+
+                    if (!cocktail.category.isNullOrBlank()) {
+                        Text(
+                            text = cocktail.category,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontStyle = FontStyle.Italic,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
@@ -119,8 +156,7 @@ fun CocktailSuggestionsCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .animateContentSize(),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
             contentColor = MaterialTheme.colorScheme.onSurface
@@ -132,14 +168,13 @@ fun CocktailSuggestionsCard(
                 .padding(vertical = 8.dp)
         ) {
             Text(
-                text = "Did you mean...",
+                text = result.subtitle,
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
             result.suggestions.forEach { suggestion ->
-                // THE FIX: Key tells Compose exactly which element this is so it doesn't redraw the whole list
                 key(suggestion) {
                     Text(
                         text = suggestion,
@@ -155,18 +190,15 @@ fun CocktailSuggestionsCard(
     }
 }
 
-// THE NEW CARD: Catching Typos
 @Composable
 fun CocktailNotFoundCard(result: SearchResult.CocktailNotFound) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .animateContentSize(),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         colors = CardDefaults.cardColors(
-            // Uses standard red error colors from Material 3
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-            contentColor = MaterialTheme.colorScheme.onErrorContainer
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
         )
     ) {
         Column(
@@ -179,11 +211,12 @@ fun CocktailNotFoundCard(result: SearchResult.CocktailNotFound) {
                 text = "No cocktail found for '${result.query}'",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Check your spelling or try another classic!",
+                text = "Check your spelling or try an ingredient (e.g. 'bar gin')!",
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center
             )
@@ -191,7 +224,7 @@ fun CocktailNotFoundCard(result: SearchResult.CocktailNotFound) {
     }
 }
 
-// Helper function mapping strings to your drawable resources.
+// Helper function mapping strings to drawable resources.
 private fun getGlassIcon(glassName: String): Int {
     return when (glassName) {
         "Cocktail Glass" -> R.drawable.ic_glass_cocktail

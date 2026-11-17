@@ -3,9 +3,9 @@ package com.example.ladybug.widget
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
@@ -19,7 +19,6 @@ import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
-import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
@@ -32,7 +31,6 @@ import com.example.ladybug.R
 
 class SearchWidget : GlanceAppWidget() {
 
-    // THE FIX: This tag tells the linter to ignore the false-positive ColorProvider bug
     @SuppressLint("RestrictedApi")
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         provideContent {
@@ -42,13 +40,13 @@ class SearchWidget : GlanceAppWidget() {
                 putExtra("FORCE_KEYBOARD_FOCUS", true)
             }
 
-            // 2. INTENT FOR GOOGLE TRANSLATE
+            // 2. INTENT FOR GOOGLE TRANSLATE (Safe web fallback if not installed)
             val translateIntent = context.packageManager.getLaunchIntentForPackage("com.google.android.apps.translate")
-                ?: Intent(Intent.ACTION_VIEW) // Safe fallback if not installed
+                ?: Intent(Intent.ACTION_VIEW, "https://translate.google.com".toUri())
 
-            // 3. INTENT FOR GOOGLE LENS (Auto-opens the camera)
+            // 3. INTENT FOR GOOGLE LENS (Safe web fallback if not installed)
             val lensIntent = context.packageManager.getLaunchIntentForPackage("com.google.ar.lens")
-                ?: Intent(Intent.ACTION_VIEW)
+                ?: Intent(Intent.ACTION_VIEW, "https://lens.google.com".toUri())
 
             // THE UI
             Row(

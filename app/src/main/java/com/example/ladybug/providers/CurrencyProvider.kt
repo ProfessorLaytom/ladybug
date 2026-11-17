@@ -11,101 +11,171 @@ import java.net.URL
 
 class CurrencyProvider(private val context: Context) : SearchProvider {
 
-    // FIX 1: Removed the redundant \\ before the $ symbol
-    private val currencyRegex = Regex("^([0-9]+(?:\\.[0-9]+)?)\\s*([a-zA-Z$€£¥]+)$")
+    // Matches suffix format (e.g., "100 usd", "10,50€", "25₪")
+    private val suffixCurrencyRegex = Regex("^([0-9]+(?:[.,][0-9]+)?)\\s*([a-zA-Z$€£¥₪]+)$")
+    // Matches prefix symbol format (e.g., "$100", "€50,25", "£20", "₪100")
+    private val prefixCurrencyRegex = Regex("^([$€£¥₪])\\s*([0-9]+(?:[.,][0-9]+)?)$")
 
-    // FIX 4: Moved constants into a companion object to respect Kotlin naming conventions
     companion object {
         private const val PREFS_NAME = "currency_cache"
         private const val KEY_RATES = "cached_rates_json"
         private const val KEY_TIMESTAMP = "last_fetch_timestamp"
         private const val ONE_DAY_MILLIS = 24 * 60 * 60 * 1000L
+
+        @Volatile
+        private var memoryRatesCache: Map<String, Double>? = null
+        @Volatile
+        private var memoryFetchTimestamp: Long = 0L
+
+        private val fallbackRates = mapOf(
+            "EUR" to 1.0,
+            "USD" to 1.08,
+            "GBP" to 0.85,
+            "AUD" to 1.65,
+            "JPY" to 162.0,
+            "CNY" to 7.80,
+            "CAD" to 1.48,
+            "CHF" to 0.95,
+            "ILS" to 4.00,
+            "INR" to 90.0,
+            "IDR" to 17200.0
+        )
+
+        /**
+         * Fast non-blocking lookup of in-memory or SharedPreferences cached rates
+         * (with fallback rates if never fetched yet) for instant UI switching.
+         */
+        fun getCachedRatesImmediate(context: Context): Map<String, Double> {
+            memoryRatesCache?.takeIf { it.isNotEmpty() }?.let { return it }
+
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val cachedJson = prefs.getString(KEY_RATES, null)
+            if (cachedJson != null) {
+                try {
+                    val jsonObject = JSONObject(cachedJson)
+                    val map = mutableMapOf<String, Double>()
+                    jsonObject.keys().forEach { key ->
+                        map[key] = jsonObject.getDouble(key)
+                    }
+                    if (map.isNotEmpty()) {
+                        memoryRatesCache = map
+                        memoryFetchTimestamp = prefs.getLong(KEY_TIMESTAMP, 0L)
+                        return map
+                    }
+                } catch (_: Exception) {}
+            }
+            return fallbackRates
+        }
+
+        /**
+         * Full rate lookup (in-memory -> 24h network refresh -> SharedPreferences -> fallback).
+         * Call from Dispatchers.IO.
+         */
+        fun getOrFetchRates(context: Context): Map<String, Double> {
+            val currentTime = System.currentTimeMillis()
+
+            // 1. Fast path: return in-memory parsed map if still fresh
+            val inMemory = memoryRatesCache
+            if (inMemory != null && inMemory.isNotEmpty() && (currentTime - memoryFetchTimestamp <= ONE_DAY_MILLIS)) {
+                return inMemory
+            }
+
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val lastFetch = prefs.getLong(KEY_TIMESTAMP, 0L)
+
+            // 2. Network refresh if cache is older than 24h
+            if (currentTime - lastFetch > ONE_DAY_MILLIS) {
+                val freshRates = fetchRatesFromNetwork()
+                if (freshRates.isNotEmpty()) {
+                    prefs.edit {
+                        putString(KEY_RATES, JSONObject(freshRates as Map<*, *>).toString())
+                        putLong(KEY_TIMESTAMP, currentTime)
+                    }
+                    memoryRatesCache = freshRates
+                    memoryFetchTimestamp = currentTime
+                    return freshRates
+                }
+            }
+
+            // 3. Fallback to SharedPreferences JSON and populate in-memory cache
+            val cachedJson = prefs.getString(KEY_RATES, null)
+            if (cachedJson != null) {
+                try {
+                    val jsonObject = JSONObject(cachedJson)
+                    val map = mutableMapOf<String, Double>()
+                    jsonObject.keys().forEach { key ->
+                        map[key] = jsonObject.getDouble(key)
+                    }
+                    if (map.isNotEmpty()) {
+                        memoryRatesCache = map
+                        memoryFetchTimestamp = lastFetch
+                        return map
+                    }
+                } catch (_: Exception) {}
+            }
+
+            return fallbackRates
+        }
+
+        private fun fetchRatesFromNetwork(): Map<String, Double> {
+            try {
+                val url = URL("https://open.er-api.com/v6/latest/EUR")
+                val connection = url.openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 3000
+                connection.readTimeout = 3000
+
+                if (connection.responseCode == HttpURLConnection.HTTP_OK) {
+                    val response = connection.inputStream.bufferedReader().use { it.readText() }
+                    val ratesJson = JSONObject(response).getJSONObject("rates")
+
+                    val map = mutableMapOf<String, Double>()
+                    ratesJson.keys().forEach { key ->
+                        map[key] = ratesJson.getDouble(key)
+                    }
+                    return map
+                }
+            } catch (_: Exception) { }
+            return emptyMap()
+        }
     }
 
-    override suspend fun performSearch(query: String): SearchResult = withContext(Dispatchers.IO) {
+    override suspend fun performSearch(query: String): SearchResult {
         val cleanQuery = query.trim().lowercase()
+        if (cleanQuery.length < 2) return SearchResult.NoMatch
 
-        try {
-            val match = currencyRegex.find(cleanQuery) ?: return@withContext SearchResult.NoMatch
+        // Fast guard clauses BEFORE switching to Dispatchers.IO
+        val (rawNumber, rawCurrency) = suffixCurrencyRegex.find(cleanQuery)?.let {
+            it.groupValues[1] to it.groupValues[2]
+        } ?: prefixCurrencyRegex.find(cleanQuery)?.let {
+            it.groupValues[2] to it.groupValues[1]
+        } ?: return SearchResult.NoMatch
 
-            val value = match.groupValues[1].toDoubleOrNull() ?: return@withContext SearchResult.NoMatch
-            val rawCurrency = match.groupValues[2]
+        val value = rawNumber.replace(',', '.').toDoubleOrNull()
+            ?: return SearchResult.NoMatch
 
-            val fromCurrency = identifyCurrencyCode(rawCurrency) ?: return@withContext SearchResult.NoMatch
+        val fromCurrency = identifyCurrencyCode(rawCurrency) ?: return SearchResult.NoMatch
 
-            val rates = getRates()
+        return withContext(Dispatchers.IO) {
+            try {
+                val rates = getOrFetchRates(context)
 
-            if (rates.isEmpty() || !rates.containsKey(fromCurrency)) {
-                return@withContext SearchResult.NoMatch
-            }
-
-            val toCurrency = if (fromCurrency == "EUR") "AUD" else "EUR"
-
-            SearchResult.Currency(
-                initialValue = value,
-                initialFromCurrency = fromCurrency,
-                initialToCurrency = toCurrency,
-                rates = rates
-            )
-            // FIX 2: Renamed 'e' to '_'
-        } catch (_: Exception) {
-            SearchResult.NoMatch
-        }
-    }
-
-    private fun getRates(): Map<String, Double> {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val lastFetch = prefs.getLong(KEY_TIMESTAMP, 0L)
-        val currentTime = System.currentTimeMillis()
-
-        if (currentTime - lastFetch > ONE_DAY_MILLIS) {
-            val freshRates = fetchRatesFromNetwork()
-            if (freshRates.isNotEmpty()) {
-
-                // FIX 3: Used the modern KTX .edit { } block
-                prefs.edit {
-                    putString(KEY_RATES, JSONObject(freshRates as Map<*, *>).toString())
-                    putLong(KEY_TIMESTAMP, currentTime)
+                if (rates.isEmpty() || !rates.containsKey(fromCurrency)) {
+                    return@withContext SearchResult.NoMatch
                 }
 
-                return freshRates
+                val toCurrency = if (fromCurrency == "EUR") "AUD" else "EUR"
+
+                SearchResult.Currency(
+                    initialValue = value,
+                    initialFromCurrency = fromCurrency,
+                    initialToCurrency = toCurrency,
+                    rates = rates
+                )
+            } catch (_: Exception) {
+                SearchResult.NoMatch
             }
         }
-
-        val cachedJson = prefs.getString(KEY_RATES, null)
-        if (cachedJson != null) {
-            val jsonObject = JSONObject(cachedJson)
-            val map = mutableMapOf<String, Double>()
-            jsonObject.keys().forEach { key ->
-                map[key] = jsonObject.getDouble(key)
-            }
-            return map
-        }
-
-        return emptyMap()
-    }
-
-    private fun fetchRatesFromNetwork(): Map<String, Double> {
-        try {
-            val url = URL("https://open.er-api.com/v6/latest/EUR")
-            val connection = url.openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 3000
-            connection.readTimeout = 3000
-
-            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                val response = connection.inputStream.bufferedReader().use { it.readText() }
-                val ratesJson = JSONObject(response).getJSONObject("rates")
-
-                val map = mutableMapOf<String, Double>()
-                ratesJson.keys().forEach { key ->
-                    map[key] = ratesJson.getDouble(key)
-                }
-                return map
-            }
-            // FIX 2: Renamed 'e' to '_'
-        } catch (_: Exception) { }
-        return emptyMap()
     }
 
     private fun identifyCurrencyCode(input: String): String? {
