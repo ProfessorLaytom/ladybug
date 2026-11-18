@@ -4,6 +4,7 @@ A fast, personal Android search bar and launcher that does what I want.
 
 ## Features
 
+- **Embedded Browser**: allows for google search-like embedded browser within ladybug, it won't create a new tab for every search. Allows the use of any browser, will always open within ladybug.
 - **Web Search & Autocomplete**: Embedded local SearXNG metasearch engine with a quick engine switcher (SearXNG, Google, Brave, DuckDuckGo, Startpage) and live autocomplete.
 - **App Launcher**: Instant accent-insensitive search for installed apps.
 - **Quick Cards**:
@@ -14,6 +15,8 @@ A fast, personal Android search bar and launcher that does what I want.
   - **Cocktail Bar**: Offline cocktail recipes by name or ingredient (`bar`).
   - **Fishdex**: Daily waterlife discovery and collection (`fish pls` / `fishdex`).
 - **Home Screen Widget**: Quick search bar with Google Translate and Lens shortcuts.
+
+  Check the helper to see the available commands !
 
 ## Download
 
