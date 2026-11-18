@@ -21,3 +21,6 @@ A fast, personal Android search bar and launcher that does what I want.
 ## Download
 
 Grab the latest APK from the [**Releases**](https://github.com/ProfessorLaytom/ladybug/releases/latest) page.
+
+
+Ladybug icon by @paola.vob (instagram)
