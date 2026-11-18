@@ -1,0 +1,132 @@
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Ladybug SearXNG"
+  privacypolicy_url: false
+  donation_url: false
+  contact_url: "https://github.com/searxng/searxng"
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: "google"
+  autocomplete_min: 3
+  default_lang: "auto"
+  ban_time_on_fail: 0
+  max_ban_time_on_fail: 0
+  suspended_times:
+    SearxEngineAccessDenied: 0
+    SearxEngineCaptcha: 0
+    SearxEngineTooManyRequests: 0
+    cf_SearxEngineCaptcha: 0
+    cf_SearxEngineAccessDenied: 0
+    recaptcha_SearxEngineCaptcha: 0
+  formats:
+    - html
+    - json
+
+server:
+  port: 8888
+  bind_address: "127.0.0.1"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+valkey:
+  url: false
+
+ui:
+  default_theme: simple
+  query_in_title: false
+  results_on_new_tab: false
+  search_on_category_select: true
+
+outgoing:
+  request_timeout: 4.0
+  max_request_timeout: 5.0
+  enable_http2: false
+  pool_connections: 30
+  retries: 0
+
+plugins:
+  searx.plugins.calculator.SXNGPlugin:
+    active: true
+  searx.plugins.hash_plugin.SXNGPlugin:
+    active: true
+  searx.plugins.self_info.SXNGPlugin:
+    active: true
+  searx.plugins.unit_converter.SXNGPlugin:
+    active: true
+  searx.plugins.ahmia_filter.SXNGPlugin:
+    active: false
+  searx.plugins.hostnames.SXNGPlugin:
+    active: true
+  searx.plugins.time_zone.SXNGPlugin:
+    active: true
+  searx.plugins.oa_doi_rewrite.SXNGPlugin:
+    active: false
+  searx.plugins.tor_check.SXNGPlugin:
+    active: false
+  searx.plugins.tracker_url_remover.SXNGPlugin:
+    active: false
+
+engines:
+  - name: google cse
+    engine: google_cse
+    shortcut: go
+    categories: [general, web]
+    timeout: 4.5
+    disabled: false
+
+  - name: google
+    engine: google
+    shortcut: goweb
+    disabled: true
+    inactive: true
+
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    startpage_categ: web
+    categories: [general, web]
+    disabled: true
+    inactive: true
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    time_range_support: true
+    paging: true
+    categories: [general, web]
+    brave_category: search
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+  - name: bing
+    engine: bing
+    shortcut: bi
+    disabled: true
+    inactive: true
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    display_type: ["infobox", "list"]
+    categories: [general]
+    disabled: false
+
+  - name: wikidata
+    engine: wikidata
+    shortcut: wd
+    timeout: 3.0
+    weight: 2
+    display_type: ["infobox"]
+    categories: [general]
+    disabled: true
+    inactive: true

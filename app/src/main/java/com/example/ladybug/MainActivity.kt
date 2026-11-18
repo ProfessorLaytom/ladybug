@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import com.example.ladybug.searxng.SearxngServerManager
 import com.example.ladybug.ui.MainSearchScreen
 import com.example.ladybug.ui.theme.LadybugTheme
 
@@ -36,6 +37,9 @@ class MainActivity : ComponentActivity() {
         // 5. Check if launched directly from Android Studio's Run (Play) button in debug mode
         val isStudioDebugLaunch = savedInstanceState == null && isLaunchedFromStudioRun(intent)
         viewModel.onAppOpened(forceForDebugRun = isStudioDebugLaunch)
+        if (SearxngServerManager.isSearxngSelected(this)) {
+            SearxngServerManager.ensureStarted(this)
+        }
 
         setContent {
             LadybugTheme {
@@ -48,6 +52,9 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         viewModel.onAppOpened(forceForDebugRun = false)
+        if (SearxngServerManager.isSearxngSelected(this)) {
+            SearxngServerManager.ensureStarted(this)
+        }
     }
 
     override fun onStop() {

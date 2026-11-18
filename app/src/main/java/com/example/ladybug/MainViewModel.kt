@@ -6,6 +6,8 @@ import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ladybug.data.SearchHistoryStore
+import com.example.ladybug.model.AutocompleteSuggestion
+import com.example.ladybug.model.SearchEngine
 import com.example.ladybug.model.SearchHistoryEntry
 import com.example.ladybug.model.SearchResult
 import com.example.ladybug.model.WikiArticle
@@ -19,8 +21,11 @@ import com.example.ladybug.providers.WeatherProvider
 import com.example.ladybug.providers.WebSearchProvider
 import com.example.ladybug.providers.WikipediaProvider
 import com.example.ladybug.providers.WorldClockProvider
+import com.example.ladybug.providers.normalizeForSearch
+import com.example.ladybug.searxng.SearxngServerManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,10 +37,23 @@ import java.util.Calendar
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val globalPrefs = application.getSharedPreferences(
+        SearxngServerManager.PREFS_NAME,
+        Context.MODE_PRIVATE
+    )
+
+    private val _selectedSearchEngine = MutableStateFlow(
+        SearchEngine.fromId(
+            globalPrefs.getString(SearxngServerManager.KEY_SELECTED_ENGINE, SearchEngine.SEARXNG.id)
+        )
+    )
+    val selectedSearchEngine: StateFlow<SearchEngine> = _selectedSearchEngine.asStateFlow()
+
     private val fishProvider = FishProvider(application)
+    private val webSearchProvider = WebSearchProvider { _selectedSearchEngine.value }
 
     private val providers: List<SearchProvider> = listOf(
-        WebSearchProvider(),
+        webSearchProvider,
         UnitConversionProvider(),
         AppSearchProvider(application),
         WikipediaProvider(),
@@ -63,6 +81,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _searchResults = MutableStateFlow<List<SearchResult>>(emptyList())
     val searchResults: StateFlow<List<SearchResult>> = _searchResults.asStateFlow()
 
+    private val _autocompleteSuggestions = MutableStateFlow<List<AutocompleteSuggestion>>(emptyList())
+    val autocompleteSuggestions: StateFlow<List<AutocompleteSuggestion>> = _autocompleteSuggestions.asStateFlow()
+
     // Stores the previous "bar ..." search query when the user taps a cocktail from the suggestions list
     private val _previousBarQuery = MutableStateFlow<String?>(null)
     val previousBarQuery: StateFlow<String?> = _previousBarQuery.asStateFlow()
@@ -81,9 +102,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var wasBackgroundedAfterDailyFish: Boolean = false
 
     private var searchJob: Job? = null
+    private var autocompleteJob: Job? = null
 
     // Persisted internet search history (web searches, direct URLs, opened Wikipedia articles), newest first
     val searchHistory: StateFlow<List<SearchHistoryEntry>> = SearchHistoryStore.entries
+
+    fun selectSearchEngine(engine: SearchEngine) {
+        globalPrefs.edit {
+            putString(SearxngServerManager.KEY_SELECTED_ENGINE, engine.id)
+        }
+        _selectedSearchEngine.value = engine
+        val appContext = getApplication<Application>()
+        if (engine == SearchEngine.SEARXNG) {
+            SearxngServerManager.ensureStarted(appContext)
+        } else {
+            SearxngServerManager.stop(appContext)
+        }
+
+        val currentQuery = _searchQuery.value
+        if (currentQuery.isNotBlank()) {
+            onQueryChanged(currentQuery, preservePreviousBarQuery = true)
+        } else {
+            autocompleteJob?.cancel()
+            _autocompleteSuggestions.value = emptyList()
+        }
+    }
+
+    fun buildWebLink(rawQuery: String): SearchResult.WebLink {
+        return webSearchProvider.buildWebLink(rawQuery, _selectedSearchEngine.value)
+    }
+
+    fun hasActiveMagicCard(results: List<SearchResult>): Boolean {
+        return results.any { result ->
+            when (result) {
+                is SearchResult.Weather,
+                is SearchResult.WorldClock,
+                is SearchResult.CocktailRecipe,
+                is SearchResult.CocktailSuggestions,
+                is SearchResult.CocktailNotFound,
+                is SearchResult.ConversionOptions,
+                is SearchResult.Currency,
+                is SearchResult.UnitConversion,
+                is SearchResult.FishHistory -> true
+                is SearchResult.Fish -> !result.isDailyFish
+                else -> false
+            }
+        }
+    }
 
     /**
      * Records a web search (Google fallback) or direct URL opened via keyboard Enter
@@ -177,6 +242,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             // Ensure the search bar is empty for the first open of the day
             searchJob?.cancel()
+            autocompleteJob?.cancel()
+            _autocompleteSuggestions.value = emptyList()
             _previousBarQuery.value = null
             _searchQuery.value = ""
 
@@ -252,15 +319,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         _searchQuery.value = newQuery
 
-        // Cancel any previous search that was still calculating
+        // Cancel any previous search and autocomplete that were still calculating
         searchJob?.cancel()
+        autocompleteJob?.cancel()
 
         // If the user clears the text bar, show only the session Daily Fish (if active) or empty state.
         if (newQuery.isBlank()) {
+            _autocompleteSuggestions.value = emptyList()
             val daily = sessionDailyFish
             _searchResults.value = if (daily != null) listOf(daily) else emptyList()
             return
         }
+
+        val cleanQuery = newQuery.trim()
+        val normQuery = cleanQuery.normalizeForSearch()
+        val isExplicitUrl = cleanQuery.startsWith("http://", ignoreCase = true) ||
+            cleanQuery.startsWith("https://", ignoreCase = true) ||
+            cleanQuery.startsWith("www.", ignoreCase = true)
+
+        val magicSuggestions = if (isExplicitUrl) {
+            emptyList()
+        } else {
+            MAGIC_COMMANDS
+                .filter { cmd ->
+                    val normCmd = cmd.normalizeForSearch()
+                    normCmd.startsWith(normQuery) && normCmd != normQuery
+                }
+                .take(4)
+                .map { AutocompleteSuggestion(text = it, isMagicCommand = true) }
+        }
+
+        // Emit 0ms Magic Command suggestions immediately (auto-cleared below if a Magic Card activates)
+        _autocompleteSuggestions.value = magicSuggestions
 
         searchJob = viewModelScope.launch {
             // A fresh list for THIS keystroke; include sessionDailyFish at lowest priority if present
@@ -280,6 +370,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             resultsForThisSearch.add(result)
                             val sortedResults = resultsForThisSearch.sortedBy { getPriorityRanking(it) }
                             _searchResults.value = sortedResults
+                            if (hasActiveMagicCard(sortedResults)) {
+                                autocompleteJob?.cancel()
+                                _autocompleteSuggestions.value = emptyList()
+                            }
                         }
                     }
                 }
@@ -291,6 +385,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // If no provider matched, keep only the session Daily Fish (if active) or empty list
             if (resultsForThisSearch.isEmpty()) {
                 _searchResults.value = emptyList()
+            }
+        }
+
+        if (cleanQuery.length >= 3 && !isExplicitUrl) {
+            val engine = _selectedSearchEngine.value
+            autocompleteJob = viewModelScope.launch {
+                val cached = webSearchProvider.getCachedAutocomplete(cleanQuery, engine)
+                if (cached == null) {
+                    delay(300L)
+                }
+                if (_searchQuery.value.trim() != cleanQuery || hasActiveMagicCard(_searchResults.value)) {
+                    return@launch
+                }
+
+                val webStrings = cached ?: webSearchProvider.fetchAutocomplete(
+                    context = getApplication(),
+                    query = cleanQuery,
+                    engine = engine
+                )
+                if (_searchQuery.value.trim() != cleanQuery || hasActiveMagicCard(_searchResults.value)) {
+                    return@launch
+                }
+
+                val combined = (magicSuggestions + webStrings.map {
+                    AutocompleteSuggestion(text = it, isMagicCommand = false)
+                })
+                    .distinctBy { it.text.normalizeForSearch() }
+                    .take(4)
+
+                _autocompleteSuggestions.value = combined
             }
         }
     }
@@ -315,5 +439,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is SearchResult.WebLink -> if (result.isDirectUrl) 0 else 10
             else -> 99
         }
+    }
+
+    companion object {
+        private val MAGIC_COMMANDS = listOf(
+            "météo",
+            "weather",
+            "heure",
+            "time",
+            "bar",
+            "conv",
+            "fish pls",
+            "fishdex",
+            "mes poissons",
+            "daily fish",
+        )
     }
 }

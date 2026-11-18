@@ -15,4 +15,7 @@
 local.properties
 /ARCHITECTURE.md
 /AI_AGENT_LOG.md
+/SEARXNG_PLAN.md
+__pycache__/
+*.py[cod]
 

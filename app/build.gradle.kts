@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.chaquopy)
 }
 
 android {
@@ -15,10 +16,14 @@ android {
         applicationId = "com.example.ladybug"
         minSdk = 24
         targetSdk = 36
-        versionCode = 3
-        versionName = "2.0"
+        versionCode = 4
+        versionName = "2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -42,6 +47,46 @@ android {
     dependenciesInfo {
         includeInApk = false
         includeInBundle = false
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+        extractPackages("searx", "certifi", "babel")
+        pip {
+            install("lxml")
+            install("cryptography")
+            install("brotli")
+            install("pyyaml")
+            install("markupsafe")
+            install("flask")
+            install("flask-babel")
+            install("jinja2")
+            install("werkzeug")
+            install("itsdangerous")
+            install("click")
+            install("httpx")
+            install("httpcore")
+            install("h2")
+            install("hpack")
+            install("hyperframe")
+            install("anyio")
+            install("sniffio")
+            install("certifi")
+            install("idna")
+            install("babel")
+            install("python-dateutil")
+            install("six")
+            install("pygments")
+            install("markdown-it-py")
+            install("mdurl")
+            install("isodate")
+            install("whitenoise")
+            install("typing-extensions")
+            install("waitress")
+            install("typer")
+        }
     }
 }
 

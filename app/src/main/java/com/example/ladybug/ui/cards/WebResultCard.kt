@@ -6,33 +6,40 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.ladybug.model.SearchResult
+import com.example.ladybug.searxng.SearxngServerManager
+import kotlinx.coroutines.launch
 import androidx.core.net.toUri
 
 @Composable
 fun WebResultCard(result: SearchResult.WebLink, onOpened: () -> Unit = {}) {
     // We still need the context to launch the tab
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .clickable {
-                // ---------------------------------------------------------
-                // THE IN-APP BROWSER UPGRADE
-                // ---------------------------------------------------------
-                // 1. Build the intent. (You can actually customize toolbar colors here later if you want!)
-                val customTabsIntent = CustomTabsIntent.Builder().build()
-
-                // 2. Save to the 📜 search history, then launch it over the current screen
+                // 1. Save to the 📜 search history, then launch over the current screen
                 onOpened()
-                customTabsIntent.launchUrl(context, result.url.toUri())
+                if (result.url.startsWith("http://127.0.0.1:8888")) {
+                    scope.launch {
+                        SearxngServerManager.awaitReady(context)
+                        val customTabsIntent = CustomTabsIntent.Builder().build()
+                        customTabsIntent.launchUrl(context, result.url.toUri())
+                    }
+                } else {
+                    val customTabsIntent = CustomTabsIntent.Builder().build()
+                    customTabsIntent.launchUrl(context, result.url.toUri())
+                }
             },
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant

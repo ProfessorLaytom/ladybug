@@ -12,6 +12,9 @@
         <package android:name="com.google.ar.lens" />
     </queries>
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -19,6 +22,7 @@
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.App.Starting"> <activity
@@ -30,6 +34,32 @@
         <category android:name="android.intent.category.LAUNCHER" />
     </intent-filter>
     </activity>
+
+        <service
+            android:name=".searxng.SearxngKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the local loopback SearXNG metasearch server (127.0.0.1:8888) alive while the user browses search results in their browser, automatically shutting down after 3 minutes of inactivity." />
+        </service>
+
+        <activity
+            android:name=".searxng.SearxngWakeActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Ladybug.Translucent">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="ladybug"
+                    android:host="wake" />
+            </intent-filter>
+        </activity>
 
         <receiver
             android:name=".widget.SearchWidgetReceiver"

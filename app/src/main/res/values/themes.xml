@@ -9,4 +9,10 @@
 
         <item name="postSplashScreenTheme">@style/Theme.Ladybug</item>
     </style>
+
+    <style name="Theme.Ladybug.Translucent" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
 </resources>

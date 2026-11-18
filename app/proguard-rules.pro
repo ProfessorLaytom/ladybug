@@ -59,3 +59,9 @@
     <init>(...);
     *;
 }
+
+# ---------------------------------------------------------------------------
+# Chaquopy embedded Python runtime
+# ---------------------------------------------------------------------------
+-keep class com.chaquo.python.** { *; }
+-keepclassmembers class com.chaquo.python.** { *; }

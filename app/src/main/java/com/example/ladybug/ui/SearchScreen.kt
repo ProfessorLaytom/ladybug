@@ -2,6 +2,7 @@ package com.example.ladybug.ui
 
 import android.content.Intent
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,6 +30,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -36,8 +38,10 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.net.toUri
 import com.example.ladybug.MainViewModel
 import com.example.ladybug.R
+import com.example.ladybug.model.AutocompleteSuggestion
 import com.example.ladybug.model.SearchResult
 import com.example.ladybug.providers.normalizeForSearch
+import com.example.ladybug.searxng.SearxngServerManager
 import com.example.ladybug.ui.cards.AppSearchCard
 import com.example.ladybug.ui.cards.CocktailNotFoundCard
 import com.example.ladybug.ui.cards.CocktailRecipeCard
@@ -53,16 +57,21 @@ import com.example.ladybug.ui.cards.WebResultCard
 import com.example.ladybug.ui.cards.WikipediaCard
 import com.example.ladybug.ui.cards.WorldClockCard
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
- * COMPONENT 1: The Search Bar
+ * COMPONENT 1: The Search Bar (Unified Flush Expandable Box)
  */
 @Composable
 fun SearchInputBar(
     modifier: Modifier = Modifier,
     query: String,
+    suggestions: List<AutocompleteSuggestion> = emptyList(),
     onQueryChange: (String) -> Unit,
     onKeyboardSearch: (String) -> Unit,
+    onMagicSuggestionClick: (String) -> Unit = onQueryChange,
+    onWebSuggestionClick: (String) -> Unit = {},
+    onWebSuggestionFill: (String) -> Unit = onQueryChange,
     autoFocus: Boolean = false,
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -90,64 +99,138 @@ fun SearchInputBar(
         keyboardController?.show()
     }
 
-    OutlinedTextField(
-        value = textFieldValue,
-        onValueChange = { newValue ->
-            val textChanged = newValue.text != textFieldValue.text
-            textFieldValue = newValue
-            if (textChanged || newValue.text != query) {
-                onQueryChange(newValue.text)
-            }
-        },
-
+    Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .focusRequester(focusRequester),
-
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-
-        keyboardActions = KeyboardActions(
-            onSearch = {
-                onKeyboardSearch(query)
-                keyboardController?.hide()
-            }
-        ),
-
-        placeholder = { Text("salut beauté 😘") },
-
-        leadingIcon = {
-            Image(
-                painter = painterResource(id = R.drawable.icon_c),
-                contentDescription = "Custom Search Icon",
-                modifier = Modifier.size(24.dp)
-            )
-        },
-
-        trailingIcon = {
-            if (query.isNotEmpty()) {
-                IconButton(onClick = {
-                    onQueryChange("")
-                    textFieldValue = TextFieldValue(text = "", selection = TextRange(0))
-                }) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.rounded_close_24),
-                        contentDescription = "Clear text"
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = textFieldValue,
+                onValueChange = { newValue ->
+                    val textChanged = newValue.text != textFieldValue.text
+                    textFieldValue = newValue
+                    if (textChanged || newValue.text != query) {
+                        onQueryChange(newValue.text)
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(
+                    onSearch = {
+                        onKeyboardSearch(query)
+                        keyboardController?.hide()
+                    }
+                ),
+                placeholder = { Text("salut beauté 😘") },
+                leadingIcon = {
+                    Image(
+                        painter = painterResource(id = R.drawable.icon_c),
+                        contentDescription = "Custom Search Icon",
+                        modifier = Modifier.size(24.dp)
                     )
+                },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = {
+                            onQueryChange("")
+                            textFieldValue = TextFieldValue(text = "", selection = TextRange(0))
+                        }) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.rounded_close_24),
+                                contentDescription = "Clear text"
+                            )
+                        }
+                    }
+                },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedBorderColor = Color.Transparent
+                )
+            )
+
+            if (suggestions.isNotEmpty()) {
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                    thickness = 1.dp
+                )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    suggestions.take(4).forEach { suggestion ->
+                        if (suggestion.isMagicCommand) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onMagicSuggestionClick(suggestion.text) }
+                                    .padding(horizontal = 16.dp, vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_magic_wand),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.surface,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = suggestion.text,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            keyboardController?.hide()
+                                            onWebSuggestionClick(suggestion.text)
+                                        }
+                                        .padding(start = 16.dp, end = 8.dp, top = 11.dp, bottom = 11.dp)
+                                ) {
+                                    Text(
+                                        text = suggestion.text,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .padding(end = 6.dp)
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { onWebSuggestionFill(suggestion.text) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "↖",
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.surface
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
-        },
-
-        singleLine = true,
-        shape = RoundedCornerShape(percent = 20),
-
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            focusedBorderColor = MaterialTheme.colorScheme.surfaceVariant,
-            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-        )
-    )
+        }
+    }
 }
 
 /**
@@ -160,16 +243,28 @@ fun MainSearchScreen(
 ) {
     val query by viewModel.searchQuery.collectAsState()
     val results by viewModel.searchResults.collectAsState()
+    val autocompleteSuggestions by viewModel.autocompleteSuggestions.collectAsState()
+    val selectedSearchEngine by viewModel.selectedSearchEngine.collectAsState()
     val previousBarQuery by viewModel.previousBarQuery.collectAsState()
     val searchHistory by viewModel.searchHistory.collectAsState()
 
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     var showHelpDialog by remember { mutableStateOf(false) }
     var showFishHistoryDialog by remember { mutableStateOf(false) }
     var showSearchHistoryDialog by remember { mutableStateOf(false) }
     var discoveredFishList by remember { mutableStateOf<List<SearchResult.Fish>>(emptyList()) }
+
+    val hasActiveMagicCard = remember(results) { viewModel.hasActiveMagicCard(results) }
+    val visibleSuggestions = remember(query, hasActiveMagicCard, autocompleteSuggestions) {
+        if (query.isNotBlank() && !hasActiveMagicCard) {
+            autocompleteSuggestions.take(4)
+        } else {
+            emptyList()
+        }
+    }
 
     val topResultKey = results.firstOrNull()?.let { resultKey(it) }
 
@@ -186,16 +281,37 @@ fun MainSearchScreen(
         }
     }
 
+    fun launchWebLink(link: SearchResult.WebLink) {
+        viewModel.recordWebSearch(link)
+        if (link.url.startsWith("http://127.0.0.1:8888")) {
+            scope.launch {
+                SearxngServerManager.awaitReady(context)
+                val customTabsIntent = CustomTabsIntent.Builder().build()
+                customTabsIntent.launchUrl(context, link.url.toUri())
+            }
+        } else {
+            val customTabsIntent = CustomTabsIntent.Builder().build()
+            customTabsIntent.launchUrl(context, link.url.toUri())
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .systemBarsPadding()
     ) {
-        // 1. THE SEARCH BAR
+        // 1. THE UNIFIED FLUSH SEARCH BAR + AUTOCOMPLETE
         SearchInputBar(
             query = query,
+            suggestions = visibleSuggestions,
             onQueryChange = { newText -> viewModel.onQueryChanged(newText) },
+            onMagicSuggestionClick = { command -> viewModel.onQueryChanged(command) },
+            onWebSuggestionClick = { suggestion ->
+                val link = viewModel.buildWebLink(suggestion)
+                launchWebLink(link)
+            },
+            onWebSuggestionFill = { suggestion -> viewModel.onQueryChanged(suggestion) },
             autoFocus = autoFocus,
             onKeyboardSearch = {
                 val topResult = results.firstOrNull()
@@ -215,9 +331,7 @@ fun MainSearchScreen(
                 } else {
                     val webCard = results.filterIsInstance<SearchResult.WebLink>().firstOrNull()
                     if (webCard != null) {
-                        viewModel.recordWebSearch(webCard)
-                        val customTabsIntent = CustomTabsIntent.Builder().build()
-                        customTabsIntent.launchUrl(context, webCard.url.toUri())
+                        launchWebLink(webCard)
                     }
                 }
             }
@@ -344,6 +458,8 @@ fun MainSearchScreen(
         Dialog(onDismissRequest = { showSearchHistoryDialog = false }) {
             SearchHistoryCard(
                 entries = searchHistory,
+                selectedEngine = selectedSearchEngine,
+                onEngineSelected = { engine -> viewModel.selectSearchEngine(engine) },
                 onEntryClick = { entry ->
                     // Only place the text back into the search bar; nothing is opened automatically
                     showSearchHistoryDialog = false
